@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>JSDoc: Source: core/service-test-runner/service-tester.js</title>
+    <title>JSDoc: Source: services/wikiapiary/wikiapiary-installs.service.js</title>
 
     <script src="scripts/prettify/prettify.js"> </script>
     <script src="scripts/prettify/lang-css.js"> </script>
@@ -17,7 +17,7 @@
 
 <div id="main">
 
-    <h1 class="page-title">Source: core/service-test-runner/service-tester.js</h1>
+    <h1 class="page-title">Source: services/wikiapiary/wikiapiary-installs.service.js</h1>
 
     
 
@@ -26,148 +26,114 @@
     
     <section>
         <article>
-            <pre class="prettyprint source linenums"><code>/**
- * @module
- */
+            <pre class="prettyprint source linenums"><code>import Joi from 'joi'
+import { metric } from '../text-formatters.js'
+import { BaseJsonService, NotFound } from '../index.js'
 
-import emojic from 'emojic'
-import icedfrisbyNockModule from 'icedfrisby-nock'
-import icedfrisbyModule from 'icedfrisby'
-import trace from '../base-service/trace.js'
-import icedfrisbyShieldsModule from './icedfrisby-shields.js'
-const frisby = icedfrisbyShieldsModule(icedfrisbyNockModule(icedfrisbyModule))
+const documentation = `
+  &lt;p>
+    The name of an extension is case-sensitive excluding the first character.
+  &lt;/p>
+  &lt;p>
+    For example, in the case of &lt;code>ParserFunctions&lt;/code>, the following are
+    valid:
+    &lt;ul>
+      &lt;li>&lt;code>ParserFunctions&lt;/code>&lt;/li>
+      &lt;li>&lt;code>parserFunctions&lt;/code>&lt;/li>
+    &lt;/ul>
+
+    However, the following are invalid:
+    &lt;ul>
+      &lt;li>&lt;code>parserfunctions&lt;/code>&lt;/li>
+      &lt;li>&lt;code>Parserfunctions&lt;/code>&lt;/li>
+      &lt;li>&lt;code>pARSERfUNCTIONS&lt;/code>&lt;/li>
+    &lt;/ul>
+  &lt;/p>
+`
+
+const schema = Joi.object({
+  query: Joi.object({
+    results: Joi.alternatives([
+      Joi.object()
+        .required()
+        .pattern(/^\w+:.+$/, {
+          printouts: Joi.object({
+            'Has website count': Joi.array()
+              .required()
+              .items(Joi.number().required()),
+          }).required(),
+        }),
+      Joi.array().required(),
+    ]).required(),
+  }).required(),
+}).required()
 
 /**
- * Encapsulate a suite of tests. Create new tests using create() and register
- * them with Mocha using toss().
+ * This badge displays the total installations of a MediaWiki extensions, skins,
+ * etc via Wikiapiary.
  *
- * @see https://github.com/badges/shields/blob/master/doc/service-tests.md
+ * {@link https://www.mediawiki.org/wiki/Manual:Extensions MediaWiki Extensions Manual}
  */
-class ServiceTester {
-  /**
-   * Service Tester Constructor
-   *
-   * @param {object} attrs Refer to individual attrs
-   * @param {string} attrs.id
-   *    Specifies which tests to run from the CLI or pull requests
-   * @param {string} attrs.title
-   *    Prints in the Mocha output
-   * @param {string} attrs.pathPrefix
-   *    Prefix which is automatically prepended to each tested URI.
-   *    The default is `/${attrs.id}`.
-   */
-  constructor({ id, title, pathPrefix }) {
-    if (pathPrefix === undefined) {
-      pathPrefix = `/${id}`
-    }
-    Object.assign(this, {
-      id,
-      title,
-      pathPrefix,
-      specs: [],
-      _only: false,
+export default class WikiapiaryInstalls extends BaseJsonService {
+  static category = 'downloads'
+  static route = {
+    base: 'wikiapiary',
+    pattern: ':variant(extension|skin|farm|generator|host)/installs/:name',
+  }
+
+  static examples = [
+    {
+      title: 'Wikiapiary installs',
+      namedParams: { variant: 'extension', name: 'ParserFunctions' },
+      staticPreview: this.render({ usage: 11170 }),
+      documentation,
+      keywords: ['mediawiki'],
+    },
+  ]
+
+  static defaultBadgeData = { label: 'installs', color: 'informational' }
+
+  static render({ usage }) {
+    return { message: metric(usage) }
+  }
+
+  static validate({ results }) {
+    if (Array.isArray(results))
+      throw new NotFound({ prettyMessage: 'not found' })
+  }
+
+  async fetch({ variant, name }) {
+    return this._requestJson({
+      schema,
+      url: `https://wikiapiary.com/w/api.php`,
+      options: {
+        qs: {
+          action: 'ask',
+          query: `[[${variant}:${name}]]|?Has_website_count`,
+          format: 'json',
+        },
+      },
     })
   }
 
-  /**
-   * Construct a ServiceTester instance for a single service class
-   *
-   * @param {Function} ServiceClass
-   *    A class that extends base-service/base.BaseService
-   * @returns {module:core/service-test-runner/service-tester~ServiceTester}
-   *    ServiceTester for ServiceClass
-   */
-  static forServiceClass(ServiceClass) {
-    const id = ServiceClass.name
-    const pathPrefix = ServiceClass.route.base
-      ? `/${ServiceClass.route.base}`
-      : ''
-    return new this({
-      id,
-      title: id,
-      pathPrefix,
-    })
-  }
+  async handle({ variant, name }) {
+    const response = await this.fetch({ variant, name })
+    const { results } = response.query
 
-  /**
-   * Invoked before each test. This is a stub which can be overridden on
-   * instances.
-   */
-  beforeEach() {}
+    this.constructor.validate({ results })
 
-  /**
-   * Create a new test. The hard work is delegated to IcedFrisby.
-   * {@link https://github.com/MarkHerhold/IcedFrisby/#show-me-some-code}
-   *
-   * Note: The caller should not invoke toss() on the Frisby chain, as it's
-   * invoked automatically by the tester.
-   *
-   * @param {string} msg The name of the test
-   * @returns {module:icedfrisby~IcedFrisby} IcedFrisby instance
-   */
-  create(msg) {
-    const spec = frisby
-      .create(msg)
-      .before(() => {
-        this.beforeEach()
-      })
-      // eslint-disable-next-line mocha/prefer-arrow-callback, promise/prefer-await-to-then
-      .finally(function () {
-        // `this` is the IcedFrisby instance.
-        let responseBody
-        try {
-          responseBody = JSON.parse(this._response.body)
-        } catch (e) {
-          responseBody = this._response.body
-        }
-        trace.logTrace('outbound', emojic.shield, 'Response', responseBody)
-      })
+    const keyLowerCase = `${variant}:${name.toLowerCase()}`
+    const resultKey = Object.keys(results).find(
+      key => keyLowerCase === key.toLowerCase()
+    )
 
-    this.specs.push(spec)
+    if (resultKey === undefined)
+      throw new NotFound({ prettyMessage: 'not found' })
 
-    return spec
-  }
-
-  /**
-   * Run only this tester. This can be invoked using the --only argument to
-   * the CLI, or directly on the tester.
-   */
-  only() {
-    this._only = true
-  }
-
-  /**
-   * Register the tests with Mocha.
-   *
-   * @param {object} attrs Refer to individual attrs
-   * @param {string} attrs.baseUrl base URL for test server
-   * @param {boolean} attrs.skipIntercepted skip tests which intercept requests
-   * @param {object} attrs.retry retry configuration
-   * @param {number} attrs.retry.count number of times to retry test
-   * @param {number} attrs.retry.backoff number of milliseconds to add to the wait between each retry
-   */
-  toss({ baseUrl, skipIntercepted, retry: { count, backoff } }) {
-    const { specs, pathPrefix } = this
-    const testerBaseUrl = `${baseUrl}${pathPrefix}`
-
-    const fn = this._only ? describe.only : describe
-    // eslint-disable-next-line mocha/prefer-arrow-callback
-    fn(this.title, function () {
-      specs.forEach(spec => {
-        spec._message = `[${spec.hasIntercept ? 'mocked' : 'live'}] ${
-          spec._message
-        }`
-        if (!skipIntercepted || !spec.intercepted) {
-          spec.baseUri(testerBaseUrl)
-          spec.retry(count, backoff)
-          spec.toss()
-        }
-      })
-    })
+    const [usage] = results[resultKey].printouts['Has website count']
+    return this.constructor.render({ usage })
   }
 }
-
-export default ServiceTester
 </code></pre>
         </article>
     </section>
