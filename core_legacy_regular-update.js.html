@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>JSDoc: Source: core/base-service/base-xml.js</title>
+    <title>JSDoc: Source: core/legacy/regular-update.js</title>
 
     <script src="scripts/prettify/prettify.js"> </script>
     <script src="scripts/prettify/lang-css.js"> </script>
@@ -17,7 +17,7 @@
 
 <div id="main">
 
-    <h1 class="page-title">Source: core/base-service/base-xml.js</h1>
+    <h1 class="page-title">Source: core/legacy/regular-update.js</h1>
 
     
 
@@ -30,71 +30,68 @@
  * @module
  */
 
-// See available emoji at http://emoji.muan.co/
-import emojic from 'emojic'
-import fastXmlParser from 'fast-xml-parser'
-import BaseService from './base.js'
-import trace from './trace.js'
-import { InvalidResponse } from './errors.js'
+import { InvalidResponse } from '../base-service/errors.js'
+import { fetchFactory } from '../../core/base-service/got.js'
+import checkErrorResponse from '../../core/base-service/check-error-response.js'
+const fetcher = fetchFactory()
+
+// Map from URL to { timestamp: last fetch time, data: data }.
+let regularUpdateCache = Object.create(null)
 
 /**
- * Services which query a XML endpoint should extend BaseXmlService
+ * Make a HTTP request using an in-memory cache
  *
- * @abstract
+ * @param {object} attrs Refer to individual attrs
+ * @param {string} attrs.url URL to request
+ * @param {number} attrs.intervalMillis Number of milliseconds to keep cached value for
+ * @param {boolean} [attrs.json=true] True if we expect to parse the response as JSON
+ * @param {Function} [attrs.scraper=buffer => buffer] Function to extract value from the response
+ * @param {object} [attrs.options={}] Options to pass to got
+ * @param {Function} [attrs.requestFetcher=fetcher] Custom fetch function
+ * @returns {*} Parsed response
  */
-class BaseXmlService extends BaseService {
-  /**
-   * Request data from an upstream API serving XML,
-   * parse it and validate against a schema
-   *
-   * @param {object} attrs Refer to individual attrs
-   * @param {Joi} attrs.schema Joi schema to validate the response against
-   * @param {string} attrs.url URL to request
-   * @param {object} [attrs.options={}] Options to pass to request. See
-   *    [documentation](https://github.com/request/request#requestoptions-callback)
-   * @param {object} [attrs.errorMessages={}] Key-value map of status codes
-   *    and custom error messages e.g: `{ 404: 'package not found' }`.
-   *    This can be used to extend or override the
-   *    [default](https://github.com/badges/shields/blob/master/core/base-service/check-error-response.js#L5)
-   * @param {object} [attrs.parserOptions={}] Options to pass to fast-xml-parser. See
-   *    [documentation](https://github.com/NaturalIntelligence/fast-xml-parser#xml-to-json)
-   * @returns {object} Parsed response
-   * @see https://github.com/request/request#requestoptions-callback
-   * @see https://github.com/NaturalIntelligence/fast-xml-parser#xml-to-json
-   */
-  async _requestXml({
-    schema,
-    url,
-    options = {},
-    errorMessages = {},
-    parserOptions = {},
-  }) {
-    const logTrace = (...args) => trace.logTrace('fetch', ...args)
-    const mergedOptions = {
-      ...{ headers: { Accept: 'application/xml, text/xml' } },
-      ...options,
-    }
-    const { buffer } = await this._request({
-      url,
-      options: mergedOptions,
-      errorMessages,
-    })
-    const validateResult = fastXmlParser.validate(buffer)
-    if (validateResult !== true) {
+async function regularUpdate({
+  url,
+  intervalMillis,
+  json = true,
+  scraper = buffer => buffer,
+  options = {},
+  requestFetcher = fetcher,
+}) {
+  const timestamp = Date.now()
+  const cached = regularUpdateCache[url]
+  if (cached != null &amp;&amp; timestamp - cached.timestamp &lt; intervalMillis) {
+    return cached.data
+  }
+
+  const { buffer } = await checkErrorResponse({})(
+    await requestFetcher(url, options)
+  )
+
+  let reqData
+  if (json) {
+    try {
+      reqData = JSON.parse(buffer)
+    } catch (e) {
       throw new InvalidResponse({
-        prettyMessage: 'unparseable xml response',
-        underlyingError: validateResult.err,
+        prettyMessage: 'unparseable intermediate json response',
+        underlyingError: e,
       })
     }
-    const xml = fastXmlParser.parse(buffer, parserOptions)
-    logTrace(emojic.dart, 'Response XML (before validation)', xml, {
-      deep: true,
-    })
-    return this.constructor._validate(xml, schema)
+  } else {
+    reqData = buffer
   }
+
+  const data = scraper(reqData)
+  regularUpdateCache[url] = { timestamp, data }
+  return data
 }
 
-export default BaseXmlService
+function clearRegularUpdateCache() {
+  regularUpdateCache = Object.create(null)
+}
+
+export { regularUpdate, clearRegularUpdateCache }
 </code></pre>
         </article>
     </section>
